@@ -1,6 +1,6 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "PedalLink",
+  "name": "PedalLink 자전거 코스 플래너",
   "icons": [
     {
       "src": "favicon.ico",

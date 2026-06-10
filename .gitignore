@@ -21,3 +21,10 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Python scripts
+src/*.py
+
+# Claude Code internal files
+CLAUDE.md
+WORK_LOG.md
