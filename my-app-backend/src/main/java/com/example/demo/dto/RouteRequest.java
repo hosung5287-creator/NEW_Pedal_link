@@ -1,0 +1,19 @@
+package com.example.demo.dto;
+
+import lombok.Data;
+import java.util.List;
+
+@Data
+public class RouteRequest {
+	private String routeName;
+    private Double fromLat;
+    private Double fromLng;
+    private String fromLabel;
+    private Double toLat;
+    private Double toLng;
+    private String toLabel;
+    private List<PointDto> bikeRoute;
+    private List<PointDto> shortestRoute;
+
+
+}

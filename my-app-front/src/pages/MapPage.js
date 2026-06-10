@@ -13,9 +13,12 @@ export default function MapPage({ onBackHome }) {
   const [isRouting, setIsRouting] = useState(false);
   const [selectedRegion, setSelectedRegion] = useState('전체');
   const [cyclewayData, setCyclewayData] = useState(null);
+  const [incheonLayer, setIncheonLayer] = useState(null);
   const [searchMode, setSearchMode] = useState(null);
   const [searchInput, setSearchInput] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [routeList, setRouteList] = useState([]);
+  const [showRouteList, setShowRouteList] = useState(false);
 
   const mapNodeRef = useRef(null);
   const mapRef = useRef(null);
@@ -29,6 +32,8 @@ export default function MapPage({ onBackHome }) {
   const endPointRef = useRef(endPoint);
   const cyclewayDataRef = useRef(cyclewayData);
   const selectedRegionRef = useRef(selectedRegion);
+  const bikeRouteRef = useRef([]);
+  const shortestRouteRef = useRef([]);
 
   useEffect(() => { startPointRef.current = startPoint; }, [startPoint]);
   useEffect(() => { endPointRef.current = endPoint; }, [endPoint]);
@@ -231,6 +236,65 @@ export default function MapPage({ onBackHome }) {
     setSearchResults([]);
   }, [searchMode]);
 
+  // 저장 - 이름 입력받아서 전송
+  const saveRoute = async () => {
+    if (!startPoint || !endPoint) {
+      alert('출발지와 도착지를 선택하세요');
+      return;
+    }
+
+    const name = prompt('경로 이름을 입력하세요');
+    if (!name) return;
+
+    const body = {
+      routeName: name,
+      fromLat: startPoint.lat,
+      fromLng: startPoint.lng,
+      fromLabel: startPoint.label,
+      toLat: endPoint.lat,
+      toLng: endPoint.lng,
+      toLabel: endPoint.label,
+      bikeRoute: bikeRouteRef.current.map(p => ({ lat: p[0], lng: p[1] })),
+      shortestRoute: shortestRouteRef.current.map(p => ({ lat: p[0], lng: p[1] })),
+    };
+
+    await fetch('http://localhost:8080/api/routes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    alert('저장 완료!');
+  };
+
+  // 목록 불러오기
+  const loadRouteList = async () => {
+    const res = await fetch('http://localhost:8080/api/routes');
+    const data = await res.json();
+    setRouteList(data);
+    setShowRouteList(true);
+  };
+
+  // 특정 경로 선택해서 지도에 표시
+ const loadRouteById = async (id) => {
+    const res = await fetch(`http://localhost:8080/api/routes/${id}`);
+    const data = await res.json();
+
+    console.log('불러온 데이터:', data); // 콘솔에서 확인용
+
+    if (!data.bikeRoute || !data.shortestRoute) {
+        alert('경로 데이터가 없습니다');
+        return;
+    }
+
+    const bike = data.bikeRoute.map(p => [p.lat, p.lng]);
+    const shortest = data.shortestRoute.map(p => [p.lat, p.lng]);
+
+    setStartPoint({ lat: data.fromLat, lng: data.fromLng, label: data.fromLabel });
+    setEndPoint({ lat: data.toLat, lng: data.toLng, label: data.toLabel });
+    drawRoutes(bike, shortest, routeLayerRef.current, mapRef.current);
+    setShowRouteList(false);
+};
+
   const findRoutes = useCallback(async (from, to) => {
     setIsRouting(true);
     setStatus(text.searching);
@@ -239,6 +303,8 @@ export default function MapPage({ onBackHome }) {
         requestBrouterRoute(from, to, 'trekking'),
         requestBrouterRoute(from, to, 'shortest'),
       ]);
+      bikeRouteRef.current = bikeRoute;
+      shortestRouteRef.current = shortestRoute;
       drawRoutes(bikeRoute, shortestRoute, routeLayerRef.current, mapRef.current);
       const data = cyclewayDataRef.current;
       const region = selectedRegionRef.current;
@@ -247,6 +313,14 @@ export default function MapPage({ onBackHome }) {
         : [];
       setStatus(routeHasCycleways(bikeRoute, features) ? text.routeReady : text.noCycleways);
 
+      // 경도/위도 데이터 콘솔 출력
+      console.log('=== 경로 데이터 ===');
+      console.log('출발지:', { 위도: from.lat, 경도: from.lng, 장소: from.label });
+      console.log('도착지:', { 위도: to.lat, 경도: to.lng, 장소: to.label });
+      console.log('자전거경로 좌표수:', bikeRoute.length);
+      console.log('최단경로 좌표수:', shortestRoute.length);
+      console.log('자전거경로 경도위도 데이터:', bikeRoute.map((p, i) => ({ 순번: i + 1, 위도: p[0], 경도: p[1] })));
+      console.log('최단경로 경도위도 데이터:', shortestRoute.map((p, i) => ({ 순번: i + 1, 위도: p[0], 경도: p[1] })));
       console.log('선택된 경로', {
         출발지: { lat: from.lat, lng: from.lng, label: from.label },
         도착지: { lat: to.lat, lng: to.lng, label: to.label },
@@ -263,6 +337,44 @@ export default function MapPage({ onBackHome }) {
       setIsRouting(false);
     }
   }, []);
+
+  // 인천 자전거도로 불러오기 함수
+  const loadIncheonCycleway = async () => {
+    // 이미 표시중이면 제거
+    if (incheonLayer) {
+      mapRef.current.removeLayer(incheonLayer);
+      setIncheonLayer(null);
+      return;
+    }
+
+    try {
+      const res = await fetch('http://localhost:8080/api/cycleway/incheon');
+      const geojsonText = await res.json();
+      const geojson = typeof geojsonText === 'string' 
+        ? JSON.parse(geojsonText) 
+        : geojsonText;
+
+      const layer = L.geoJSON(geojson, {
+        style: {
+          color: '#2563eb',
+          weight: 2,
+          opacity: 0.7,
+          fillColor: '#2563eb',
+          fillOpacity: 0.2
+        }
+      }).addTo(mapRef.current);
+
+      // 인천으로 지도 이동
+      mapRef.current.flyToBounds(layer.getBounds(), { 
+        padding: [40, 40], 
+        duration: 0.8 
+      });
+
+      setIncheonLayer(layer);
+    } catch (e) {
+      console.error('인천 자전거도로 로딩 실패:', e);
+    }
+  };
 
   const resetPlanner = useCallback(() => {
     setStartPoint(null);
@@ -292,9 +404,16 @@ export default function MapPage({ onBackHome }) {
           </label>
           <label className="regionSelect">
             <span>{text.regionLabel}</span>
-            <select value={selectedRegion} onChange={(e) => setSelectedRegion(e.target.value)}>
+            <select value={selectedRegion} onChange={(e) => {
+              const val = e.target.value;
+              setSelectedRegion(val);
+              if (val === '인천') {
+                loadIncheonCycleway();
+              }
+            }}>
               <option value="전체">{text.regionAll}</option>
               {GU_LIST.map(gu => <option key={gu} value={gu}>{gu}</option>)}
+              <option value="인천">인천</option>
             </select>
           </label>
           <a className="mapCloseButton" href="/" onClick={onBackHome}>{text.close}</a>
@@ -373,7 +492,37 @@ export default function MapPage({ onBackHome }) {
               <p className="routeStatus" aria-live="polite">
                 {isRouting ? text.searching : status}
               </p>
+              {/* 저장/목록 버튼 */}
+              <button className="resetButton" type="button" onClick={saveRoute}>
+                경로 저장
+              </button>
+              <button className="resetButton" type="button" onClick={loadRouteList}>
+                저장된 경로 목록
+              </button>
               <button className="resetButton" type="button" onClick={resetPlanner}>{text.reset}</button>
+
+              {/* 경로 목록 패널 */}
+              {showRouteList && (
+                <div style={{ marginTop: '12px', padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '6px', maxHeight: '300px', overflowY: 'auto' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <h3 style={{ margin: '0', fontSize: '14px', fontWeight: '600' }}>저장된 경로</h3>
+                    <button type="button" onClick={() => setShowRouteList(false)} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+                  </div>
+                  {routeList.length === 0 ? (
+                    <p style={{ margin: '8px 0', fontSize: '12px', color: '#666' }}>저장된 경로가 없습니다.</p>
+                  ) : (
+                    <ul style={{ listStyle: 'none', padding: '0', margin: '0' }}>
+                      {routeList.map(r => (
+                        <li key={r.id} onClick={() => loadRouteById(r.id)} style={{ padding: '8px', marginBottom: '6px', backgroundColor: '#fff', borderRadius: '4px', cursor: 'pointer', borderLeft: '3px solid #2563eb' }}>
+                          <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '4px' }}>{r.routeName}</div>
+                          <div style={{ fontSize: '11px', color: '#666', marginBottom: '2px' }}>{r.fromLabel} → {r.toLabel}</div>
+                          <div style={{ fontSize: '11px', color: '#999' }}>{new Date(r.createdAt).toLocaleDateString()}</div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
             </>
           )}
         </aside>
